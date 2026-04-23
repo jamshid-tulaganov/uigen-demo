@@ -1,0 +1,30 @@
+name: Claude Test Writer
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npx prisma generate
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Check test coverage for changed files.
+            Use the test-writer subagent from .claude/agents/test-writer.md.
+            Report missing tests as a PR comment.
+          allowed_tools: "Read Grep Glob Bash(git:*) Bash(npx vitest:*)"

@@ -1,0 +1,281 @@
+stages:
+  - validate
+  - test
+  - build
+  - claude-agents
+
+variables:
+  NODE_VERSION: "20"
+
+default:
+  image: node:${NODE_VERSION}
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}
+    paths:
+      - node_modules/
+      - .next/cache/
+
+# ──────────────────────────────────────
+# Stage 1: validate (lint + typecheck)
+# ──────────────────────────────────────
+lint:
+  stage: validate
+  script:
+    - npm ci
+    - npx prisma generate
+    - npm run lint
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+typecheck:
+  stage: validate
+  script:
+    - npm ci
+    - npx prisma generate
+    - npx tsc --noEmit
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+# ──────────────────────────────────────
+# Stage 2: test
+# ──────────────────────────────────────
+unit-tests:
+  stage: test
+  script:
+    - npm ci
+    - npx prisma generate
+    - npm test -- --reporter=verbose
+  coverage: '/All files\s*\|\s*(\d+\.?\d*)\s*\|/'
+  artifacts:
+    when: always
+    reports:
+      junit: test-results.xml
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+# ──────────────────────────────────────
+# Stage 3: build
+# ──────────────────────────────────────
+build:
+  stage: build
+  needs: [lint, typecheck, unit-tests]
+  script:
+    - npm ci
+    - npx prisma generate
+    - npx prisma migrate deploy
+    - npm run build
+  artifacts:
+    paths:
+      - .next/
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_BRANCH == "dev"
+
+# ══════════════════════════════════════
+# Stage 4: Claude Code Subagents
+# 3 parallel agents: Review, Test, Docs
+# ══════════════════════════════════════
+
+# ── Agent 1: Code Reviewer ───────────
+claude-reviewer:
+  stage: claude-agents
+  image: node:${NODE_VERSION}
+  needs: [lint, typecheck, unit-tests]
+  before_script:
+    - npm ci
+    - npx prisma generate
+    - npm i -g @anthropic-ai/claude-code
+  script:
+    - |
+      DIFF=$(git diff origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD)
+      FILES=$(git diff --name-only origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD)
+
+      claude -p "You are a senior code reviewer for UIGen (Next.js + React + Prisma + Tailwind).
+
+      ## Changed files:
+      $FILES
+
+      ## Full diff:
+      $DIFF
+
+      ## Review checklist:
+      **Security**
+      - [ ] getSession() called in every server action/API route
+      - [ ] No XSS: no dangerouslySetInnerHTML or unescaped user input
+      - [ ] No hardcoded secrets or API keys
+      - [ ] Input validated before database operations
+
+      **Correctness**
+      - [ ] No logic errors, race conditions, or off-by-one bugs
+      - [ ] Proper TypeScript types (no \`any\`)
+      - [ ] Error handling with try/catch and user-friendly messages
+      - [ ] Edge cases handled (empty data, missing props)
+
+      **React & Next.js**
+      - [ ] 'use client' only when necessary (hooks, events, browser API)
+      - [ ] Proper hook dependency arrays
+      - [ ] No unnecessary re-renders
+      - [ ] Server components used where possible
+
+      **Style**
+      - [ ] Tailwind CSS only, cn() for conditional classes
+      - [ ] Follows shadcn/ui patterns
+      - [ ] Consistent naming conventions
+
+      ## Output format:
+      For each finding:
+      \`\`\`
+      [CRITICAL|WARNING|SUGGESTION] file:line
+        Issue: what is wrong
+        Fix: how to fix it
+      \`\`\`
+
+      End with: **APPROVE** / **REQUEST CHANGES** / **NEEDS DISCUSSION**
+      Include a 1-paragraph summary." \
+      --output-format text > review-report.txt
+    - cat review-report.txt
+    - |
+      if grep -q "\[CRITICAL\]" review-report.txt; then
+        echo "CRITICAL issues found — blocking merge."
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths:
+      - review-report.txt
+    expire_in: 30 days
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+  allow_failure: false
+
+# ── Agent 2: Test Generator ──────────
+claude-tester:
+  stage: claude-agents
+  image: node:${NODE_VERSION}
+  needs: [lint, typecheck, unit-tests]
+  before_script:
+    - npm ci
+    - npx prisma generate
+    - npm i -g @anthropic-ai/claude-code
+  script:
+    - |
+      FILES=$(git diff --name-only origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD | grep -E '\.(ts|tsx)$' | grep -v '__tests__' | grep -v '.test.' || true)
+
+      if [ -z "$FILES" ]; then
+        echo "No source files changed — skipping test generation."
+        echo "No new tests needed." > test-coverage-report.txt
+        exit 0
+      fi
+
+      claude -p "You are a QA engineer for UIGen (Vitest + React Testing Library).
+
+      ## Changed source files (no test files):
+      $FILES
+
+      ## Your tasks:
+      1. For each changed file, check if a test file exists in __tests__/
+      2. If tests are MISSING, generate them
+      3. If tests EXIST, check if new code paths are covered
+      4. Report test coverage gaps
+
+      ## Test conventions:
+      - Test location: \`__tests__/<ComponentName>.test.tsx\` next to the source
+      - Use \`vi.mock()\` for: next/navigation, @/lib/prisma, @/lib/auth
+      - Use \`render, screen, fireEvent\` from @testing-library/react
+      - Test behavior not implementation
+      - Include: happy path, edge cases, error states
+
+      ## Output format:
+      ### Coverage Report
+      | File | Has Tests | Coverage | Gaps |
+      |------|-----------|----------|------|
+      | path | Yes/No | Good/Partial/None | missing scenarios |
+
+      ### New Test Files Created
+      List any test files you would create with their content.
+
+      ### Recommendations
+      Bullet list of testing improvements." \
+      --output-format text > test-coverage-report.txt
+    - cat test-coverage-report.txt
+  artifacts:
+    when: always
+    paths:
+      - test-coverage-report.txt
+    expire_in: 30 days
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+  allow_failure: true
+
+# ── Agent 3: Documentation Generator ─
+claude-docs:
+  stage: claude-agents
+  image: node:${NODE_VERSION}
+  needs: [lint, typecheck, unit-tests]
+  before_script:
+    - npm ci
+    - npx prisma generate
+    - npm i -g @anthropic-ai/claude-code
+  script:
+    - |
+      DIFF=$(git diff origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD)
+      FILES=$(git diff --name-only origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD)
+
+      claude -p "You are a technical writer for UIGen (Next.js + React + Prisma).
+
+      ## Changed files:
+      $FILES
+
+      ## Diff:
+      $DIFF
+
+      ## Your tasks:
+      1. **Changelog entry**: Write a concise changelog entry for these changes
+      2. **API docs**: If any API routes or server actions changed, document the new/modified endpoints
+      3. **Component docs**: If any components changed, document new props or behavior
+      4. **CLAUDE.md update**: Check if CLAUDE.md needs updating for new patterns or conventions
+      5. **Breaking changes**: Flag any breaking changes that downstream code needs to handle
+
+      ## Output format:
+
+      ### Changelog
+      \`\`\`
+      ## [Unreleased]
+      ### Added
+      - ...
+      ### Changed
+      - ...
+      ### Fixed
+      - ...
+      \`\`\`
+
+      ### API Documentation
+      | Endpoint | Method | Auth | Description |
+      |----------|--------|------|-------------|
+
+      ### Component Changes
+      | Component | Change | Migration needed? |
+      |-----------|--------|-------------------|
+
+      ### CLAUDE.md Updates Needed
+      - [ ] item (or 'No updates needed')
+
+      ### Breaking Changes
+      - None / list of breaking changes" \
+      --output-format text > docs-report.txt
+    - cat docs-report.txt
+  artifacts:
+    when: always
+    paths:
+      - docs-report.txt
+    expire_in: 30 days
+  rules:
+    - if: $CI_MERGE_REQUEST_IID
+  allow_failure: true
