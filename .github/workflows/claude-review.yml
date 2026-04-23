@@ -3,8 +3,14 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, synchronize]
+  pull_request_review_comment:
+    types: [created]
   issue_comment:
     types: [created]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -17,8 +23,10 @@ jobs:
     name: "Claude: Review"
     if: |
       (github.event_name == 'pull_request') ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,28 +46,28 @@ jobs:
           use_sticky_comment: true
           display_report: true
           show_full_output: true
+          claude_args: "--max-turns 5 --model claude-sonnet-4-6"
           prompt: |
-            Review this PR. Be concise.
+            Review this PR. Be concise — max 20 lines total.
 
             Read .claude/agents/code-reviewer.md and .claude/skills/security-review/CHECKLIST.md.
 
             Check: missing getSession(), hardcoded secrets, eval(), auth bypass, data leaks, IDOR.
 
-            Format each finding as one line:
+            Format:
             🔴 P0: file:line — issue → DO NOT MERGE
             🟡 P1: file:line — issue
             🔵 P2: file:line — issue
 
             Tag @${{ github.event.pull_request.user.login || 'author' }}.
 
-            End with either:
-            ⛔ DO NOT MERGE (if any P0)
-            ✅ APPROVED (if no P0)
+            End with: ⛔ DO NOT MERGE (if P0) or ✅ APPROVED (if no P0)
 
       - name: Block merge on P0
         if: always()
         run: |
-          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.issue.number }}/comments --jq '.[] | select(.user.login == "claude[bot]") | .body')
+          PR=${{ github.event.pull_request.number || github.event.issue.number }}
+          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${PR}/comments --jq '.[] | select(.user.login == "claude[bot]") | .body' 2>/dev/null || echo "")
           if echo "$COMMENTS" | grep -q "DO NOT MERGE"; then
             echo "::error::P0 found — merge blocked"
             exit 1
@@ -74,6 +82,7 @@ jobs:
     needs: claude-review
     if: success()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,12 +100,18 @@ jobs:
           use_sticky_comment: true
           display_report: true
           show_full_output: true
+          claude_args: "--max-turns 3 --model claude-sonnet-4-6"
           prompt: |
-            Generate docs for this PR. Be concise.
+            Generate short docs for this PR. Max 15 lines.
 
             Read .claude/agents/documenter.md and .claude/skills/documentation.md.
 
             Output:
-            1. Changelog (Added/Changed/Fixed — one line each)
-            2. API changes table (if any)
-            3. Breaking changes (if any)
+            ## Changelog
+            - Added/Changed/Fixed — one line each
+
+            ## API Changes (if any)
+            | Endpoint | Method | Auth | Description |
+
+            ## Breaking Changes
+            None / list
