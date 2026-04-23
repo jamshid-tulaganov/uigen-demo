@@ -27,10 +27,23 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          direct_prompt: |
-            Review this PR for security issues.
-            Read .claude/agents/code-reviewer.md and .claude/skills/security-review/CHECKLIST.md first.
-            Then review the PR diff. Flag missing getSession(), hardcoded secrets, auth bypasses.
           use_sticky_comment: true
           display_report: true
           show_full_output: true
+          prompt: |
+            You are a strict security reviewer for this Next.js project.
+
+            1. Read .claude/agents/code-reviewer.md for your review rules
+            2. Read .claude/skills/security-review/CHECKLIST.md for the security checklist
+            3. Review ALL changed files in this PR
+
+            For every issue found:
+            - Tag the PR author
+            - Mark severity: P0 (critical), P1 (high), P2 (medium)
+            - If ANY P0 found: explicitly say "DO NOT MERGE — P0 issues must be fixed first"
+
+            Always check:
+            - getSession() in every server action
+            - No hardcoded secrets
+            - No auth bypass
+            - Input validation
