@@ -73,11 +73,9 @@ jobs:
         if: always()
         run: |
           COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.issue.number }}/comments --jq '.[] | select(.user.login == "claude[bot]") | .body')
-          if echo "$COMMENTS" | grep -q "DO NOT MERGE"; then
+          if echo "$COMMENTS" | grep -q "P0"; then
             echo "::error::P0 security issues found — merge blocked"
             exit 1
-          else
-            echo "✅ No P0 issues — merge allowed"
           fi
         env:
           GH_TOKEN: ${{ github.token }}
