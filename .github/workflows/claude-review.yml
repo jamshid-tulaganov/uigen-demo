@@ -10,8 +10,8 @@ permissions:
   id-token: write
 
 jobs:
-  review:
-    name: Code Review (Claude Agent)
+  code-review:
+    name: "Claude: Code Review"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +23,57 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
 
-      # Reads agent + skill from .claude/ folder
-      - name: Claude reviews using project agents & skills
+      - name: Claude Code Review
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: "/review"
-          allowed_tools: "Read Grep Glob Bash(git:*)"
+          use_sticky_comment: true
+          display_report: true
+          show_full_output: true
+          prompt: |
+            You are a strict code reviewer for this Next.js project.
+            Read .claude/agents/code-reviewer.md for your review rules.
+            Review ALL changed files. For each issue:
+            - Severity: P0 (critical), P1 (high), P2 (medium)
+            - If ANY P0 found: say "DO NOT MERGE"
+            Tag the PR author.
+
+  security-review:
+    name: "Claude: Security Review"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Claude Security Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_sticky_comment: true
+          display_report: true
+          show_full_output: true
+          prompt: |
+            You are a security auditor for this Next.js + Prisma project.
+            Read .claude/skills/security-review/SKILLS.md for your role.
+            Read .claude/skills/security-review/CHECKLIST.md and go through EVERY item.
+
+            Check ALL changed files for:
+            1. Missing getSession() in server actions and API routes
+            2. Hardcoded secrets, API keys, tokens
+            3. eval() or Function() with user input
+            4. No auth on destructive operations (delete, update)
+            5. User data leakage (passwords, tokens in responses)
+            6. IDOR — accessing resources without ownership check
+
+            For each finding:
+            🔴 P0: exploitable now → DO NOT MERGE
+            🟡 P1: potential vulnerability → fix before merge
+            🔵 P2: best practice → fix in follow-up
+
+            Tag the PR author on every finding.
