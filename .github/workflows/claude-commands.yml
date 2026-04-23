@@ -1,0 +1,88 @@
+name: Claude Commit Commands
+
+on:
+  push:
+    branches: [dev, "workshop/*", "feature/*"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+jobs:
+  # [claude:review] in commit message → security review
+  claude-review:
+    name: "Claude: Security Review"
+    if: contains(github.event.head_commit.message, '[claude:review]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npx prisma generate
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_sticky_comment: true
+          display_report: true
+          show_full_output: true
+          prompt: |
+            Review the latest commit for security issues.
+            Read .claude/agents/code-reviewer.md and .claude/skills/security-review/CHECKLIST.md.
+            Check for missing getSession(), hardcoded secrets, auth bypass, XSS, injection.
+
+  # [claude:test] in commit message → test coverage check
+  claude-test:
+    name: "Claude: Test Coverage"
+    if: contains(github.event.head_commit.message, '[claude:test]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npx prisma generate
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_sticky_comment: true
+          display_report: true
+          show_full_output: true
+          prompt: |
+            Read .claude/agents/test-writer.md and .claude/skills/test-coverage.md.
+            Check changed files in this commit for missing tests.
+            Generate tests for any untested files.
+            Run npx vitest run to verify.
+
+  # [claude:docs] in commit message → generate docs
+  claude-docs:
+    name: "Claude: Generate Docs"
+    if: contains(github.event.head_commit.message, '[claude:docs]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npx prisma generate
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_sticky_comment: true
+          display_report: true
+          show_full_output: true
+          prompt: |
+            Read .claude/agents/documenter.md and .claude/skills/documentation.md.
+            Generate changelog, API docs, and component docs for this commit.
+            Flag any breaking changes.
