@@ -13,41 +13,11 @@ permissions:
   id-token: write
 
 jobs:
-  # Step 1: When PR opens, auto-post @claude comment to trigger review
-  auto-trigger:
-    name: "Auto-trigger Claude"
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/github-script@v7
-        with:
-          script: |
-            // Check if Claude already reviewed (avoid duplicates)
-            const comments = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-            });
-            const hasReview = comments.data.some(c =>
-              c.body.includes('@claude') && c.user.login === 'github-actions[bot]'
-            );
-            if (hasReview) {
-              console.log('Claude already triggered, skipping');
-              return;
-            }
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: '@claude Review this PR for security issues.\n\nRead `.claude/agents/code-reviewer.md` for review rules.\nRead `.claude/skills/security-review/CHECKLIST.md` and check every item.\n\nFor each finding:\n- 🔴 P0: exploitable now → **DO NOT MERGE**\n- 🟡 P1: fix before merge\n- 🔵 P2: fix in follow-up\n\nTag the PR author on every finding.'
-            });
-
-  # Step 2: Claude responds to @claude comment
   claude-review:
     name: "Claude: Security + Code Review"
     if: |
-      github.event_name == 'issue_comment' &&
-      contains(github.event.comment.body, '@claude')
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,3 +38,31 @@ jobs:
           use_sticky_comment: true
           display_report: true
           show_full_output: true
+          claude_args: "--print"
+          prompt: |
+            You MUST review this PR and post your findings as a comment.
+
+            ## Instructions
+            1. Read .claude/agents/code-reviewer.md
+            2. Read .claude/skills/security-review/CHECKLIST.md
+            3. Run: git diff ${{ github.event.pull_request.base.sha || 'HEAD~1' }}..${{ github.event.pull_request.head.sha || 'HEAD' }}
+            4. Review EVERY changed file
+
+            ## What to check
+            - Missing getSession() in server actions (src/actions/) and API routes (src/app/api/)
+            - Hardcoded secrets, API keys, tokens in source code
+            - eval() or Function() with user input
+            - No auth on destructive operations (delete, update)
+            - User data leakage (passwords, tokens in API responses)
+            - IDOR — accessing resources without ownership check (userId)
+
+            ## Output format
+            For EACH finding:
+            🔴 **P0** (critical): [file:line] — description → **DO NOT MERGE**
+            🟡 **P1** (high): [file:line] — description
+            🔵 **P2** (medium): [file:line] — description
+
+            Tag @${{ github.event.pull_request.user.login || 'author' }} on every finding.
+
+            If ANY P0 found, end with: ⛔ **DO NOT MERGE — P0 issues must be fixed first**
+            If no issues: ✅ **APPROVED — no security issues found**
