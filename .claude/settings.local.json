@@ -23,7 +23,8 @@
       "Bash(mkdir:*)",
       "Bash(wc:*)",
       "Read(//Users/jamshid/Desktop/**)",
-      "Read(//Users/jamshid/**)"
+      "Read(//Users/jamshid/**)",
+      "Bash(gh run *)"
     ]
   }
 }
