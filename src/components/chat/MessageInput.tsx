@@ -26,6 +26,7 @@ export function MessageInput({
     }
   };
 
+  // add the return to the textarea
   return (
     <form onSubmit={handleSubmit} className="relative p-4 bg-white border-t border-neutral-200/60">
       <div className="relative max-w-4xl mx-auto">
