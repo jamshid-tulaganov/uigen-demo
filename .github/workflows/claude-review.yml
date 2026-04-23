@@ -3,15 +3,21 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write
   id-token: write
 
 jobs:
   review:
     name: Code Review (Claude Agent)
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,16 +29,11 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
 
-      - name: Claude reviews using project agents & skills
+      - name: Claude Code Review
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
           use_sticky_comment: true
           display_report: true
-          prompt: |
-            Review this PR using the project's code-reviewer agent definition
-            in .claude/agents/code-reviewer.md and the security checklist in
-            .claude/skills/security-review/CHECKLIST.md.
-
-            Read both files first, then review the PR diff following those rules.
-            Flag any missing getSession() calls, hardcoded secrets, or auth bypasses.
+          show_full_output: true
