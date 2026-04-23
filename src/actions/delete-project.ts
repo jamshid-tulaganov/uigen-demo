@@ -1,12 +1,31 @@
 "use server";
 
+import { getSession } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
-// BUG: getSession() yo'q — xavfsizlik xatosi!
 export async function deleteProject(projectId: string) {
-  await prisma.project.delete({
-    where: { id: projectId },
-  });
+  const session = await getSession();
 
-  return { success: true };
+  if (!session) {
+    return { success: false, error: "Unauthorized" };
+  }
+
+  try {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+    });
+
+    if (!project || project.userId !== session.userId) {
+      return { success: false, error: "Project not found" };
+    }
+
+    await prisma.project.delete({
+      where: { id: projectId },
+    });
+
+    return { success: true };
+  } catch (error) {
+    console.error("Delete project error:", error);
+    return { success: false, error: "Failed to delete project" };
+  }
 }
