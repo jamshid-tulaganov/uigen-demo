@@ -23,27 +23,10 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
 
-      - name: Claude Code Review
+      # Reads agent + skill from .claude/ folder
+      - name: Claude reviews using project agents & skills
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          use_sticky_comment: true
-          display_report: true
-          show_full_output: true
-          prompt: |
-            You are a strict security reviewer for this Next.js project.
-
-            1. Read .claude/agents/code-reviewer.md for your review rules
-            2. Read .claude/skills/security-review/CHECKLIST.md for the security checklist
-            3. Review ALL changed files in this PR
-
-            For every issue found:
-            - Tag the PR author
-            - Mark severity: P0 (critical), P1 (high), P2 (medium)
-            - If ANY P0 found: explicitly say "DO NOT MERGE — P0 issues must be fixed first"
-
-            Always check:
-            - getSession() in every server action
-            - No hardcoded secrets
-            - No auth bypass
-            - Input validation
+          prompt: "/review"
+          allowed_tools: "Read Grep Glob Bash(git:*)"
