@@ -30,6 +30,7 @@ jobs:
       - run: npx prisma generate
 
       - name: Claude Review
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -66,3 +67,15 @@ jobs:
 
             If ANY P0 found, end with: ⛔ **DO NOT MERGE — P0 issues must be fixed first**
             If no issues: ✅ **APPROVED — no security issues found**
+
+      # Fail the check if P0 found — blocks merge
+      - name: Check for P0 issues
+        if: always()
+        run: |
+          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.issue.number }}/comments --jq '.[] | select(.user.login == "claude[bot]") | .body')
+          if echo "$COMMENTS" | grep -q "P0"; then
+            echo "::error::P0 security issues found — merge blocked"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
