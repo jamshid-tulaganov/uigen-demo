@@ -23,10 +23,16 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
 
-      # Reads agent + skill from .claude/ folder
       - name: Claude reviews using project agents & skills
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: "/review"
-          allowed_tools: "Read Grep Glob Bash(git:*)"
+          use_sticky_comment: true
+          display_report: true
+          prompt: |
+            Review this PR using the project's code-reviewer agent definition
+            in .claude/agents/code-reviewer.md and the security checklist in
+            .claude/skills/security-review/CHECKLIST.md.
+
+            Read both files first, then review the PR diff following those rules.
+            Flag any missing getSession() calls, hardcoded secrets, or auth bypasses.
