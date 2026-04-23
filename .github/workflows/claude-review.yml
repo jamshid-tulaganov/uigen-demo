@@ -3,21 +3,15 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, synchronize]
-  issue_comment:
-    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
-  issues: write
   id-token: write
 
 jobs:
   review:
     name: Code Review (Claude Agent)
-    if: |
-      (github.event_name == 'pull_request') ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +27,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          trigger_phrase: "@claude"
+          direct_prompt: |
+            Review this PR for security issues.
+            Read .claude/agents/code-reviewer.md and .claude/skills/security-review/CHECKLIST.md first.
+            Then review the PR diff. Flag missing getSession(), hardcoded secrets, auth bypasses.
           use_sticky_comment: true
           display_report: true
           show_full_output: true
