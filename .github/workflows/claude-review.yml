@@ -3,15 +3,51 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write
   id-token: write
 
 jobs:
-  code-review:
-    name: "Claude: Code Review"
+  # Step 1: When PR opens, auto-post @claude comment to trigger review
+  auto-trigger:
+    name: "Auto-trigger Claude"
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // Check if Claude already reviewed (avoid duplicates)
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const hasReview = comments.data.some(c =>
+              c.body.includes('@claude') && c.user.login === 'github-actions[bot]'
+            );
+            if (hasReview) {
+              console.log('Claude already triggered, skipping');
+              return;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '@claude Review this PR for security issues.\n\nRead `.claude/agents/code-reviewer.md` for review rules.\nRead `.claude/skills/security-review/CHECKLIST.md` and check every item.\n\nFor each finding:\n- 🔴 P0: exploitable now → **DO NOT MERGE**\n- 🟡 P1: fix before merge\n- 🔵 P2: fix in follow-up\n\nTag the PR author on every finding.'
+            });
+
+  # Step 2: Claude responds to @claude comment
+  claude-review:
+    name: "Claude: Security + Code Review"
+    if: |
+      github.event_name == 'issue_comment' &&
+      contains(github.event.comment.body, '@claude')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,50 +59,11 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
 
-      - name: Claude Code Review
+      - name: Claude Review
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
           use_sticky_comment: true
           display_report: true
           show_full_output: true
-          prompt: |
-            You are a strict code reviewer for this Next.js project.
-            Read .claude/agents/code-reviewer.md for your review rules.
-            Review ALL changed files. For each issue:
-            - Severity: P0 (critical), P1 (high), P2 (medium)
-            - If ANY P0 found: say "DO NOT MERGE"
-            Tag the PR author.
-
-  security-review:
-    name: "Claude: Security Review"
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      - run: npm ci
-      - run: npx prisma generate
-
-      - name: Claude Security Review
-        uses: anthropics/claude-code-action@v1
-        with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          use_sticky_comment: true
-          display_report: true
-          show_full_output: true
-          prompt: |
-            You are a security auditor for this Next.js + Prisma project.
-            Read .claude/skills/security-review/SKILLS.md and .claude/skills/security-review/CHECKLIST.md.
-            Check ALL changed files for:
-            1. Missing getSession() in server actions and API routes
-            2. Hardcoded secrets, API keys, tokens
-            3. eval() or Function() with user input
-            4. No auth on destructive operations
-            5. User data leakage (passwords in responses)
-            6. IDOR — accessing resources without ownership check
-            For each finding use: 🔴 P0, 🟡 P1, 🔵 P2.
-            If ANY P0: say "DO NOT MERGE". Tag the PR author.
