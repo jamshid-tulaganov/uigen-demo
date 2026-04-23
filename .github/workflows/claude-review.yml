@@ -3,15 +3,21 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, synchronize]
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
   pull-requests: write
+  issues: write
   id-token: write
 
 jobs:
-  review:
-    name: Code Review (Claude Agent)
+  claude-review:
+    name: "Claude: Security + Code Review"
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +29,53 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
 
-      # Reads agent + skill from .claude/ folder
-      - name: Claude reviews using project agents & skills
+      - name: Claude Review
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: "/review"
-          allowed_tools: "Read Grep Glob Bash(git:*)"
+          trigger_phrase: "@claude"
+          allowed_bots: "github-actions[bot]"
+          use_sticky_comment: true
+          display_report: true
+          show_full_output: true
+          claude_args: "--print"
+          prompt: |
+            You MUST review this PR and post your findings as a comment.
+
+            ## Instructions
+            1. Read .claude/agents/code-reviewer.md
+            2. Read .claude/skills/security-review/CHECKLIST.md
+            3. Run: git diff ${{ github.event.pull_request.base.sha || 'HEAD~1' }}..${{ github.event.pull_request.head.sha || 'HEAD' }}
+            4. Review EVERY changed file
+
+            ## What to check
+            - Missing getSession() in server actions (src/actions/) and API routes (src/app/api/)
+            - Hardcoded secrets, API keys, tokens in source code
+            - eval() or Function() with user input
+            - No auth on destructive operations (delete, update)
+            - User data leakage (passwords, tokens in API responses)
+            - IDOR — accessing resources without ownership check (userId)
+
+            ## Output format
+            For EACH finding:
+            🔴 **P0** (critical): [file:line] — description → **DO NOT MERGE**
+            🟡 **P1** (high): [file:line] — description
+            🔵 **P2** (medium): [file:line] — description
+
+            Tag @${{ github.event.pull_request.user.login || 'author' }} on every finding.
+
+            If ANY P0 found, end with: ⛔ **DO NOT MERGE — P0 issues must be fixed first**
+            If no issues: ✅ **APPROVED — no security issues found**
+
+      # Fail the check if P0 found — blocks merge
+      - name: Check for P0 issues
+        if: always()
+        run: |
+          COMMENTS=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.issue.number }}/comments --jq '.[] | select(.user.login == "claude[bot]") | .body')
+          if echo "$COMMENTS" | grep -q "P0"; then
+            echo "::error::P0 security issues found — merge blocked"
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
